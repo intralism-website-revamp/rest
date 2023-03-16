@@ -365,3 +365,23 @@ app.get(`${CONFIG.urlPrefix}/leaderboard`, async function(req, res){
         }
     }
 });
+
+app.get(`${CONFIG.urlPrefix}/leaderboard/:country`, async function(req, res){
+    let conn;
+
+    try {
+        conn = await pool.getConnection();
+        let players = await conn.query("select * from `players` where country='" + req.params.country + "'");
+
+        players = players.sort((a, b) => a.country_rank - b.country_rank);
+
+        res.header("Access-Control-Allow-Origin", "*");
+        res.send(players);
+    } catch(err) {
+        throw err;
+    } finally {
+        if(conn) {
+            await conn.end();
+        }
+    }
+});
