@@ -242,7 +242,7 @@ async function updatePlayer(player) {
 
         await pool.query("INSERT INTO `players`(`id`, `name`, `image`, `pp`, `points`, `rank`, `country`, `country_rank`, `accuracy`, `misses`, `last_update`) VALUES('" + player.id + "', '" + player.name + "', '" + player.picture + "', '" + player.weightedpp + "', '" + player.points + "', '" + newRank + "', '" + player.countryShort + "', '" + countryNewRank + "', '" + player.accuracy + "', '" + player.misses + "', '" + new Date() + "') ON DUPLICATE KEY UPDATE name = '" + player.name + "', image = '" + player.picture + "', pp = '" + player.weightedpp + "', points = '" + player.points + "', rank = '" + newRank + "', country = '" + player.countryShort + "', country_rank = '" + countryNewRank + "', accuracy = '" + player.accuracy + "', misses = '" + player.misses + "', last_update = '" + new Date() + "';");
     } catch (err) {
-        throw err;
+        console.log(err);
     } finally {
         if (conn) {
             await conn.end();
@@ -358,7 +358,7 @@ app.get(`${CONFIG.urlPrefix}/leaderboard`, async function(req, res){
         res.header("Access-Control-Allow-Origin", "*");
         res.send(players);
     } catch(err) {
-        throw err;
+        console.log(err);
     } finally {
         if(conn) {
             await conn.end();
@@ -378,10 +378,30 @@ app.get(`${CONFIG.urlPrefix}/leaderboard/:country`, async function(req, res){
         res.header("Access-Control-Allow-Origin", "*");
         res.send(players);
     } catch(err) {
-        throw err;
+        console.log(err);
     } finally {
         if(conn) {
             await conn.end();
         }
     }
+});
+
+app.get(`${CONFIG.urlPrefix}/tags/:playerid`, async function(req, res) {
+   let conn;
+
+   try {
+       conn = await pool.getConnection();
+       let tags = await conn.query("select t.name, t.order from `tags` as t, `player_tags` as pt where player_id='" + req.params.playerid + "' and t.id = pt.tag_id");
+
+       tags = tags.sort((a, b) => b.id - a.id);
+
+       res.header("Access-Control-Allow-Origin", "*");
+       res.send(JSON.stringify(tags));
+   } catch(err) {
+       console.log(err);
+   } finally {
+       if(conn) {
+           await conn.end();
+       }
+   }
 });
