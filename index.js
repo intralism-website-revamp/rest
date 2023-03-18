@@ -413,7 +413,7 @@ app.get(`${CONFIG.urlPrefix}/playerNoUpdate/:playerid`, async function(req, res)
        conn = await pool.getConnection();
        let playerRaw = await conn.query("select * from `players` where id='" + req.params.playerid + "'");
 
-       if(playerRaw[0]['id'] === null) {
+       if(playerRaw[0] === undefined) {
            res.header("Access-Control-Allow-Origin", "*");
            res.send(JSON.stringify(null));
            return;
