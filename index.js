@@ -5,24 +5,12 @@ const cors = require('cors');
 const bodyParser = require('body-parser');
 const cheerio = require('cheerio');
 const axios = require("axios");
-const fs = require("fs");
 const CONFIG = require("./config.json");
 
 app.use(cors());
 app.use(bodyParser.json({ extended: true }));
 
-const scoresCsv = [];
-
 BigInt.prototype.toJSON = function() { return this.toString() }
-
-fs.readFile('./scores.csv', (err, data) => {
-    if (err) throw err;
-    let splittedData = data.toString().split('\n');
-
-    for(let i = 0; i < splittedData.length; i++) {
-        scoresCsv.push(splittedData[i]);
-    }
-})
 
 const pool = mariadb.createPool({
     host: CONFIG.sqlIp,
@@ -55,10 +43,6 @@ app.get(`${CONFIG.urlPrefix}/player/:id`, async function(req, res){
         player.countryShort = "none";
     }
 
-    //player.globalRank = content('body > main > div.row > div.col-md-4.text-md-right > span:nth-child(2)').text();
-    //player.globalRankMax = playerInfoDiv[1].split('/')[1].replace(" ", "");
-    //player.countryRank = content('body > main > div.row > div.col-md-4.text-md-right > span:nth-child(5)').text();
-    //player.countryRankMax = playerInfoDiv[2].split('/')[1].replace(" ", "");
     player.accuracy = playerInfoDiv[3].split(':')[1].replace(" ", "").replaceAll("%", "");
     player.misses = playerInfoDiv[4].split(':')[1].replace(" ", "");
     player.points = content('body > main > p > span').text();
@@ -68,6 +52,19 @@ app.get(`${CONFIG.urlPrefix}/player/:id`, async function(req, res){
     let mapname = "default";
     let i = 0;
     player.scores = [];
+
+    let conn, maps;
+
+    try {
+        conn = await pool.getConnection();
+        maps = await conn.query("select * from `maps`");
+    } catch (err) {
+        console.log(err);
+    } finally {
+        if(conn) {
+            await conn.end();
+        }
+    }
 
     while(mapname !== "") {
         i++;
@@ -90,25 +87,24 @@ app.get(`${CONFIG.urlPrefix}/player/:id`, async function(req, res){
         const tempId = content('body > main > div.table-responsive > table > tbody > tr:nth-child(' + i + ') > td.text-left > a').attr().href;
         score.id = tempId.substring(tempId.lastIndexOf('=') + 1, tempId.length);
 
-        if(!scoresCsv.find(x => x.includes("," + score.id))) {
+        if(!maps.find(x => parseInt(x.id) === parseInt(score.id))) {
             continue;
         }
 
-        const map = scoresCsv.find(x => x.includes(',' + score.id));
+        const map = maps.find(x => parseInt(x.id) === parseInt(score.id));
 
         score.date = content('body > main > div.table-responsive > table > tbody > tr:nth-child(' + i + ') > td:nth-child(1)').text();
         score.score = content('body > main > div.table-responsive > table > tbody > tr:nth-child(' + i + ') > td:nth-child(3)').text();
         score.score = parseInt(score.score.replaceAll(" ", ""));
-        score.maxscore = parseInt(map.split(',')[4]);
+        score.maxscore = parseInt(map.score);
         score.accuracy = content('body > main > div.table-responsive > table > tbody > tr:nth-child(' + i + ') > td:nth-child(4)').text();
         score.accuracy = parseFloat(score.accuracy.replaceAll("%", ""));
         score.misses = parseInt(content('body > main > div.table-responsive > table > tbody > tr:nth-child(' + i + ') > td:nth-child(5)').text());
         score.points = parseFloat(content('body > main > div.table-responsive > table > tbody > tr:nth-child(' + i + ') > td:nth-child(6)').text());
-        score.maxpoints = parseFloat(map.split(',')[1]);
+        score.maxpoints = parseFloat(map.points);
         score.mapname = mapname;
         score.pp = Math.round(score.score / score.maxscore * (Math.pow(0.9, score.misses)) * score.accuracy * score.maxpoints * 0.08 * 2 * 100) / 100;
-        //score.maxpp = Math.round(score.maxpoints * 0.08 * 2 * 100 * 100) / 100;
-        score.image = content('body > main > div.table-responsive > table > tbody > tr:nth-child(' + i + ') > td:nth-child(2)').children().get(0).children[0].attributes[0].value;
+        score.image = map.image;
 
         let grade = 'Grade_';
         const acc = score.accuracy;
@@ -130,7 +126,7 @@ app.get(`${CONFIG.urlPrefix}/player/:id`, async function(req, res){
         score.grade = grade;
 
         if(score.accuracy === '100.00') {
-            if(map.split(',')[3] === 'Broken') {
+            if(map.status === 'Broken') {
                 score.points = score.points - 0.01;
             }
         }
@@ -157,6 +153,197 @@ app.get(`${CONFIG.urlPrefix}/player/:id`, async function(req, res){
     res.send(JSON.stringify(player));
 });
 
+app.get(`${CONFIG.urlPrefix}/leaderboard`, async function(req, res){
+    let conn;
+
+    try {
+        conn = await pool.getConnection();
+        let players = await conn.query('select * from `players`');
+
+        players = players.sort((a, b) => a.rank - b.rank);
+
+        res.header("Access-Control-Allow-Origin", "*");
+        res.send(players);
+    } catch(err) {
+        console.log(err);
+    } finally {
+        if(conn) {
+            await conn.end();
+        }
+    }
+});
+
+app.get(`${CONFIG.urlPrefix}/leaderboard/:country`, async function(req, res){
+    let conn;
+
+    try {
+        conn = await pool.getConnection();
+        let players = await conn.query("select * from `players` where country='" + req.params.country + "'");
+
+        players = players.sort((a, b) => a.country_rank - b.country_rank);
+
+        res.header("Access-Control-Allow-Origin", "*");
+        res.send(players);
+    } catch(err) {
+        console.log(err);
+    } finally {
+        if(conn) {
+            await conn.end();
+        }
+    }
+});
+
+app.get(`${CONFIG.urlPrefix}/tags/:playerid`, async function(req, res) {
+   let conn;
+
+   try {
+       conn = await pool.getConnection();
+       let tags = await conn.query("select t.name, t.order from `tags` as t, `player_tags` as pt where player_id='" + req.params.playerid + "' and t.id = pt.tag_id");
+
+       tags = tags.sort((a, b) => b.id - a.id);
+
+       res.header("Access-Control-Allow-Origin", "*");
+       res.send(JSON.stringify(tags));
+   } catch(err) {
+       console.log(err);
+   } finally {
+       if(conn) {
+           await conn.end();
+       }
+   }
+});
+
+app.get(`${CONFIG.urlPrefix}/playerNoUpdate/:playerid`, async function(req, res) {
+   let conn;
+
+   try {
+       conn = await pool.getConnection();
+       let playerRaw = await conn.query("select * from `players` where id='" + req.params.playerid + "'");
+
+       if(playerRaw[0] === undefined) {
+           res.header("Access-Control-Allow-Origin", "*");
+           res.send(JSON.stringify(null));
+           return;
+       }
+
+       let player = playerRaw[0];
+       let country;
+
+       if(player.country === "none") {
+           country = "Unknown Country";
+       } else {
+           let regionNames = new Intl.DisplayNames(['en'], {type: 'region'});
+           country = regionNames.of(player.country.toUpperCase());
+       }
+
+       let scoresRaw = await conn.query("select * from `scores` where player_id='" + req.params.playerid + "'");
+       let maps = await conn.query("select * from `maps`");
+       let scores = [];
+
+       for(let i = 0; i < scoresRaw.length; i++) {
+           let scoreRaw = scoresRaw[i];
+           let scoreInfo = maps.find(x => x.id === scoreRaw.map_id);
+
+           let score = {
+               id: scoreRaw.map_id,
+               grade: scoreRaw.grade,
+               mapname: scoreInfo.name,
+               image: scoreInfo.image,
+               maxpoints: scoreInfo.points,
+               date: scoreRaw.date,
+               hardcore: scoreRaw.hardcore,
+               accuracy: scoreRaw.accuracy,
+               misses: scoreRaw.misses,
+               weightedpp: "",
+               pp: scoreRaw.pp
+           }
+
+           scores.push(score);
+       }
+
+       scores = scores.sort((a, b) => b.pp - a.pp);
+
+       let playerInfo = {
+           picture: player.image,
+           name: player.name,
+           globalRank: player.rank,
+           country: country,
+           countryShort: player.country,
+           countryRank: player.country_rank,
+           points: player.points,
+           weightedpp: player.pp,
+           scores: scores
+       };
+
+       res.header("Access-Control-Allow-Origin", "*");
+       res.send(JSON.stringify(playerInfo));
+   } catch(err) {
+       console.log(err);
+   } finally {
+       if(conn) {
+           await conn.end();
+       }
+   }
+});
+
+app.get(`${CONFIG.urlPrefix}/maps`, async function(req, res) {
+    let conn;
+
+    try {
+        conn = await pool.getConnection();
+        let maps = await conn.query("select * from `maps`");
+
+        maps = maps.sort((a, b) => b.pp - a.pp);
+
+        res.header("Access-Control-Allow-Origin", "*");
+        res.send(JSON.stringify(maps));
+    } catch(err) {
+        console.log(err);
+    } finally {
+        if(conn) {
+            await conn.end();
+        }
+    }
+});
+
+app.get(`${CONFIG.urlPrefix}/map/:mapid`, async function(req, res) {
+    let conn;
+
+    try {
+        conn = await pool.getConnection();
+        let map = await conn.query("select * from `maps` where id='" + req.params.mapid + "'");
+
+        res.header("Access-Control-Allow-Origin", "*");
+        res.send(JSON.stringify(map[0]));
+    } catch(err) {
+        console.log(err);
+    } finally {
+        if(conn) {
+            await conn.end();
+        }
+    }
+});
+
+app.get(`${CONFIG.urlPrefix}/scores/:mapid`, async function(req, res) {
+    let conn;
+
+    try {
+        conn = await pool.getConnection();
+        let scores = await conn.query("select * from `scores` where map_id='" + req.params.mapid + "'");
+
+        scores = scores.sort((a, b) => b.pp - a.pp);
+
+        res.header("Access-Control-Allow-Origin", "*");
+        res.send(JSON.stringify(scores));
+    } catch(err) {
+        console.log(err);
+    } finally {
+        if(conn) {
+            await conn.end();
+        }
+    }
+});
+
 async function updatePlayer(player) {
     let updateTime = new Date();
     updateTime.setFullYear(1970);
@@ -168,11 +355,11 @@ async function updatePlayer(player) {
     try {
         conn = await pool.getConnection();
 
-        const playerSql = await pool.query("SELECT * FROM `players` WHERE id = '" + player.id + "'");
+        const playerSql = await conn.query("SELECT * FROM `players` WHERE id = '" + player.id + "'");
 
         if(playerSql[0] === undefined) {
-            let oneRankHigher = await pool.query("SELECT id, MAX(rank) FROM `players` WHERE pp > '" + player.weightedpp + "'");
-            let oneRankHigherCountry = await pool.query("SELECT id, MAX(country_rank) FROM `players` WHERE pp > '" + player.weightedpp + "' AND country = '" + player.countryShort + "'");
+            let oneRankHigher = await conn.query("SELECT id, MAX(rank) FROM `players` WHERE pp > '" + player.weightedpp + "'");
+            let oneRankHigherCountry = await conn.query("SELECT id, MAX(country_rank) FROM `players` WHERE pp > '" + player.weightedpp + "' AND country = '" + player.countryShort + "'");
 
             if(oneRankHigher[0]['id'] === null) {
                 newRank = "1";
@@ -186,22 +373,22 @@ async function updatePlayer(player) {
                 countryNewRank = (parseInt(oneRankHigherCountry[0]['MAX(country_rank)']) + 1) + "";
             }
 
-            let playersWithLowerRank = await pool.query("SELECT id, rank FROM `players` WHERE pp < '" + player.weightedpp + "'");
+            let playersWithLowerRank = await conn.query("SELECT id, rank FROM `players` WHERE pp < '" + player.weightedpp + "'");
 
             for(let i = 0; i < playersWithLowerRank.length; i++) {
-                await pool.query("UPDATE `players` SET rank = '" + (parseInt(playersWithLowerRank[i]['rank']) + 1) + "' WHERE id = '" + playersWithLowerRank[i]['id'] + "';");
+                await conn.query("UPDATE `players` SET rank = '" + (parseInt(playersWithLowerRank[i]['rank']) + 1) + "' WHERE id = '" + playersWithLowerRank[i]['id'] + "';");
             }
 
-            let playersWithLowerCountryRank = await pool.query("SELECT id, country_rank FROM `players` WHERE pp < '" + player.weightedpp + "' AND country = '" + player.countryShort + "'");
+            let playersWithLowerCountryRank = await conn.query("SELECT id, country_rank FROM `players` WHERE pp < '" + player.weightedpp + "' AND country = '" + player.countryShort + "'");
 
             for(let i = 0; i < playersWithLowerCountryRank.length; i++) {
-                await pool.query("UPDATE `players` SET country_rank = '" + (parseInt(playersWithLowerCountryRank[i]['country_rank']) + 1) + "' WHERE id = '" + playersWithLowerCountryRank[i]['id'] + "';");
+                await conn.query("UPDATE `players` SET country_rank = '" + (parseInt(playersWithLowerCountryRank[i]['country_rank']) + 1) + "' WHERE id = '" + playersWithLowerCountryRank[i]['id'] + "';");
             }
         } else {
             updateTime.setTime(Date.parse(playerSql[0]['last_update']));
             let oldPp = playerSql[0]['pp'];
 
-            const overtakenPlayers = await pool.query("SELECT * FROM `players` WHERE pp < '" + player.weightedpp + "' AND pp > '" + oldPp + "';");
+            const overtakenPlayers = await conn.query("SELECT * FROM `players` WHERE pp < '" + player.weightedpp + "' AND pp > '" + oldPp + "';");
 
             let highestRank = -1;
             for (let i = 0; i < overtakenPlayers.length; i++) {
@@ -211,7 +398,7 @@ async function updatePlayer(player) {
                     highestRank = overtakenPlayerRank;
                 }
 
-                await pool.query("UPDATE `players` SET rank = '" + (overtakenPlayerRank + 1) + "' WHERE id = '" + overtakenPlayers[i]['id'] + "';");
+                await conn.query("UPDATE `players` SET rank = '" + (overtakenPlayerRank + 1) + "' WHERE id = '" + overtakenPlayers[i]['id'] + "';");
             }
 
             if (highestRank === -1) {
@@ -220,7 +407,7 @@ async function updatePlayer(player) {
 
             newRank = highestRank;
 
-            const overtakenCountryPlayers = await pool.query("SELECT * FROM `players` WHERE pp < '" + player.weightedpp + "' AND pp > '" + oldPp + "' AND country='" + player.countryShort + "';");
+            const overtakenCountryPlayers = await conn.query("SELECT * FROM `players` WHERE pp < '" + player.weightedpp + "' AND pp > '" + oldPp + "' AND country='" + player.countryShort + "';");
 
             let highestCountryRank = -1;
             for (let i = 0; i < overtakenCountryPlayers.length; i++) {
@@ -230,7 +417,7 @@ async function updatePlayer(player) {
                     highestCountryRank = overtakenPlayerCountryRank;
                 }
 
-                await pool.query("UPDATE `players` SET country_rank = '" + (overtakenPlayerCountryRank + 1) + "' WHERE id = '" + overtakenCountryPlayers[i]['id'] + "';");
+                await conn.query("UPDATE `players` SET country_rank = '" + (overtakenPlayerCountryRank + 1) + "' WHERE id = '" + overtakenCountryPlayers[i]['id'] + "';");
             }
 
             if (highestCountryRank === -1) {
@@ -240,7 +427,7 @@ async function updatePlayer(player) {
             countryNewRank = highestCountryRank;
         }
 
-        await pool.query("INSERT INTO `players`(`id`, `name`, `image`, `pp`, `points`, `rank`, `country`, `country_rank`, `accuracy`, `misses`, `last_update`) VALUES('" + player.id + "', '" + player.name + "', '" + player.picture + "', '" + player.weightedpp + "', '" + player.points + "', '" + newRank + "', '" + player.countryShort + "', '" + countryNewRank + "', '" + player.accuracy + "', '" + player.misses + "', '" + new Date() + "') ON DUPLICATE KEY UPDATE name = '" + player.name + "', image = '" + player.picture + "', pp = '" + player.weightedpp + "', points = '" + player.points + "', rank = '" + newRank + "', country = '" + player.countryShort + "', country_rank = '" + countryNewRank + "', accuracy = '" + player.accuracy + "', misses = '" + player.misses + "', last_update = '" + new Date() + "';");
+        await conn.query("INSERT INTO `players`(`id`, `name`, `image`, `pp`, `points`, `rank`, `country`, `country_rank`, `accuracy`, `misses`, `last_update`) VALUES('" + player.id + "', '" + player.name + "', '" + player.picture + "', '" + player.weightedpp + "', '" + player.points + "', '" + newRank + "', '" + player.countryShort + "', '" + countryNewRank + "', '" + player.accuracy + "', '" + player.misses + "', '" + new Date() + "') ON DUPLICATE KEY UPDATE name = '" + player.name + "', image = '" + player.picture + "', pp = '" + player.weightedpp + "', points = '" + player.points + "', rank = '" + newRank + "', country = '" + player.countryShort + "', country_rank = '" + countryNewRank + "', accuracy = '" + player.accuracy + "', misses = '" + player.misses + "', last_update = '" + new Date() + "';");
     } catch (err) {
         console.log(err);
     } finally {
@@ -345,135 +532,3 @@ function parseWebsiteDateToDate(websiteDate) {
 
     return date;
 }
-
-app.get(`${CONFIG.urlPrefix}/leaderboard`, async function(req, res){
-    let conn;
-
-    try {
-        conn = await pool.getConnection();
-        let players = await conn.query('select * from `players`');
-
-        players = players.sort((a, b) => a.rank - b.rank);
-
-        res.header("Access-Control-Allow-Origin", "*");
-        res.send(players);
-    } catch(err) {
-        console.log(err);
-    } finally {
-        if(conn) {
-            await conn.end();
-        }
-    }
-});
-
-app.get(`${CONFIG.urlPrefix}/leaderboard/:country`, async function(req, res){
-    let conn;
-
-    try {
-        conn = await pool.getConnection();
-        let players = await conn.query("select * from `players` where country='" + req.params.country + "'");
-
-        players = players.sort((a, b) => a.country_rank - b.country_rank);
-
-        res.header("Access-Control-Allow-Origin", "*");
-        res.send(players);
-    } catch(err) {
-        console.log(err);
-    } finally {
-        if(conn) {
-            await conn.end();
-        }
-    }
-});
-
-app.get(`${CONFIG.urlPrefix}/tags/:playerid`, async function(req, res) {
-   let conn;
-
-   try {
-       conn = await pool.getConnection();
-       let tags = await conn.query("select t.name, t.order from `tags` as t, `player_tags` as pt where player_id='" + req.params.playerid + "' and t.id = pt.tag_id");
-
-       tags = tags.sort((a, b) => b.id - a.id);
-
-       res.header("Access-Control-Allow-Origin", "*");
-       res.send(JSON.stringify(tags));
-   } catch(err) {
-       console.log(err);
-   } finally {
-       if(conn) {
-           await conn.end();
-       }
-   }
-});
-
-app.get(`${CONFIG.urlPrefix}/playerNoUpdate/:playerid`, async function(req, res) {
-   let conn;
-
-   try {
-       conn = await pool.getConnection();
-       let playerRaw = await conn.query("select * from `players` where id='" + req.params.playerid + "'");
-
-       if(playerRaw[0] === undefined) {
-           res.header("Access-Control-Allow-Origin", "*");
-           res.send(JSON.stringify(null));
-           return;
-       }
-
-       let player = playerRaw[0];
-       let country;
-
-       if(player.country === "none") {
-           country = "Unknown Country";
-       } else {
-           let regionNames = new Intl.DisplayNames(['en'], {type: 'region'});
-           country = regionNames.of(player.country.toUpperCase());
-       }
-
-       let scoresRaw = await conn.query("select * from `scores` where player_id='" + req.params.playerid + "'");
-       let scores = [];
-
-       for(let i = 0; i < scoresRaw.length; i++) {
-           let scoreRaw = scoresRaw[i];
-           let scoreInfo = scoresCsv.find(x => x.includes(',' + scoreRaw.map_id));
-
-           let score = {
-               id: scoreRaw.map_id,
-               grade: scoreRaw.grade,
-               mapname: scoreInfo.split(',')[0],
-               image: "",
-               maxpoints: scoreInfo.split(',')[1],
-               date: scoreRaw.date,
-               hardcore: scoreRaw.hardcore,
-               accuracy: scoreRaw.accuracy,
-               misses: scoreRaw.misses,
-               weightedpp: "",
-               pp: scoreRaw.pp
-           }
-
-           scores.push(score);
-       }
-
-       scores = scores.sort((a, b) => b.pp - a.pp);
-
-       let playerInfo = {
-           picture: player.image,
-           name: player.name,
-           globalRank: player.rank,
-           country: country,
-           countryShort: player.country,
-           countryRank: player.country_rank,
-           points: player.points,
-           weightedpp: player.pp,
-           scores: scores
-       };
-
-       res.header("Access-Control-Allow-Origin", "*");
-       res.send(JSON.stringify(playerInfo));
-   } catch(err) {
-       console.log(err);
-   } finally {
-       if(conn) {
-           await conn.end();
-       }
-   }
-});
