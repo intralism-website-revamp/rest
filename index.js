@@ -49,11 +49,30 @@ app.get(`${CONFIG.urlPrefix}/player/:id`, async function(req, res){
     player.points = player.points.replace('Ranked Points: ', '').replace(" ", "");
     player.picture = content('body > main > div.mt-5 > img').attr().src;
 
+    let conn;
+
+    if(player.points === "0.00") {
+        try {
+            conn = await pool.getConnection();
+            await conn.query("DELETE FROM `players` where id='" + req.params.id + "';");
+            await conn.query("DELETE FROM `scores` where player_id='" + req.params.id + "';");
+        } catch(err) {
+            console.log(err);
+        } finally {
+            if(conn) {
+                await conn.end();
+            }
+        }
+        res.header("Access-Control-Allow-Origin", "*");
+        res.send(JSON.stringify(player));
+        return;
+    }
+
     let mapname = "default";
     let i = 0;
     player.scores = [];
 
-    let conn, maps;
+    let maps;
 
     try {
         conn = await pool.getConnection();
@@ -148,6 +167,25 @@ app.get(`${CONFIG.urlPrefix}/player/:id`, async function(req, res){
     player.globalRank = updatePlayerResult.globalRank;
     player.countryRank = updatePlayerResult.countryRank;
     await updatePlayerScores(player, updatePlayerResult.updateTime);
+
+    player.missingScores = [];
+
+    for(let j = 0; j < maps.length; j++) {
+        if(player.scores.find(x => BigInt(x.id) === BigInt(maps[j].id)) === undefined) {
+            let map = maps[j];
+
+            let missingScore = {
+                id: map.id,
+                name: map.name,
+                pp: map.pp,
+                points: map.points,
+                image: map.image
+            };
+            player.missingScores.push(missingScore);
+        }
+    }
+
+    player.missingScores = player.missingScores.sort((a, b) => b.pp - a.pp);
 
     res.header("Access-Control-Allow-Origin", "*");
     res.send(JSON.stringify(player));
@@ -272,7 +310,9 @@ app.get(`${CONFIG.urlPrefix}/playerNoUpdate/:playerid`, async function(req, res)
            countryRank: player.country_rank,
            points: player.points,
            weightedpp: player.pp,
-           scores: scores
+           scores: scores,
+           accuracy: player.accuracy,
+           misses: player.misses
        };
 
        res.header("Access-Control-Allow-Origin", "*");
