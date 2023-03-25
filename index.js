@@ -6,9 +6,12 @@ const bodyParser = require('body-parser');
 const cheerio = require('cheerio');
 const axios = require("axios");
 const CONFIG = require("./config.json");
+const {auth} = require("express-oauth2-jwt-bearer");
+const {errorHandler} = require("./errorHandler");
 
 app.use(cors());
 app.use(bodyParser.json({ extended: true }));
+app.use(errorHandler);
 
 BigInt.prototype.toJSON = function() { return this.toString() }
 
@@ -26,6 +29,19 @@ const server = app.listen(CONFIG.serverPort, function () {
 
     console.log("app listening at http://%s:%s", host, port);
 });
+
+const validateAccessToken = auth({
+    issuerBaseURL: CONFIG.auth0Domain,
+    audience: CONFIG.auth0Audience,
+    tokenSigningAlg: 'RS256'
+});
+
+const corsHeader = function (req, res, next) {
+    res.header("Access-Control-Allow-Origin", CONFIG.corsAllowOrigin);
+    next();
+}
+
+app.use(corsHeader);
 
 app.get(`${CONFIG.urlPrefix}/player/:id`, async function(req, res){
     const player = {};
@@ -157,6 +173,10 @@ app.get(`${CONFIG.urlPrefix}/player/:id`, async function(req, res){
     player.weightedpp = 0.0;
 
     for(let j = 0; j < player.scores.length; j++) {
+        if(j >= 75) {
+            player.scores[j].weightedpp = 0;
+            continue;
+        }
         player.scores[j].weightedpp = Math.round(player.scores[j].pp * Math.pow(0.95, j) * 100) / 100;
         player.weightedpp += player.scores[j].weightedpp;
     }
@@ -187,7 +207,6 @@ app.get(`${CONFIG.urlPrefix}/player/:id`, async function(req, res){
 
     player.missingScores = player.missingScores.sort((a, b) => b.pp - a.pp);
 
-    res.header("Access-Control-Allow-Origin", "*");
     res.send(JSON.stringify(player));
 });
 
@@ -200,7 +219,6 @@ app.get(`${CONFIG.urlPrefix}/leaderboard`, async function(req, res){
 
         players = players.sort((a, b) => a.rank - b.rank);
 
-        res.header("Access-Control-Allow-Origin", "*");
         res.send(players);
     } catch(err) {
         console.log(err);
@@ -220,7 +238,6 @@ app.get(`${CONFIG.urlPrefix}/leaderboard/:country`, async function(req, res){
 
         players = players.sort((a, b) => a.country_rank - b.country_rank);
 
-        res.header("Access-Control-Allow-Origin", "*");
         res.send(players);
     } catch(err) {
         console.log(err);
@@ -240,7 +257,6 @@ app.get(`${CONFIG.urlPrefix}/tags/:playerid`, async function(req, res) {
 
        tags = tags.sort((a, b) => b.id - a.id);
 
-       res.header("Access-Control-Allow-Origin", "*");
        res.send(JSON.stringify(tags));
    } catch(err) {
        console.log(err);
@@ -259,7 +275,6 @@ app.get(`${CONFIG.urlPrefix}/playerNoUpdate/:playerid`, async function(req, res)
        let playerRaw = await conn.query("select * from `players` where id='" + req.params.playerid + "'");
 
        if(playerRaw[0] === undefined) {
-           res.header("Access-Control-Allow-Origin", "*");
            res.send(JSON.stringify(null));
            return;
        }
@@ -315,7 +330,6 @@ app.get(`${CONFIG.urlPrefix}/playerNoUpdate/:playerid`, async function(req, res)
            misses: player.misses
        };
 
-       res.header("Access-Control-Allow-Origin", "*");
        res.send(JSON.stringify(playerInfo));
    } catch(err) {
        console.log(err);
@@ -335,7 +349,6 @@ app.get(`${CONFIG.urlPrefix}/maps`, async function(req, res) {
 
         maps = maps.sort((a, b) => b.pp - a.pp);
 
-        res.header("Access-Control-Allow-Origin", "*");
         res.send(JSON.stringify(maps));
     } catch(err) {
         console.log(err);
@@ -353,7 +366,6 @@ app.get(`${CONFIG.urlPrefix}/map/:mapid`, async function(req, res) {
         conn = await pool.getConnection();
         let map = await conn.query("select * from `maps` where id='" + req.params.mapid + "'");
 
-        res.header("Access-Control-Allow-Origin", "*");
         res.send(JSON.stringify(map[0]));
     } catch(err) {
         console.log(err);
@@ -370,10 +382,8 @@ app.get(`${CONFIG.urlPrefix}/scores/:mapid`, async function(req, res) {
     try {
         conn = await pool.getConnection();
         let scores = await conn.query("select * from `scores` where map_id='" + req.params.mapid + "'");
+        scores = scores.sort((a, b) => (b.score < a.score) ? -1 : ((b.score > a.score) ? 1 : 0));
 
-        scores = scores.sort((a, b) => b.pp - a.pp);
-
-        res.header("Access-Control-Allow-Origin", "*");
         res.send(JSON.stringify(scores));
     } catch(err) {
         console.log(err);
@@ -382,6 +392,10 @@ app.get(`${CONFIG.urlPrefix}/scores/:mapid`, async function(req, res) {
             await conn.end();
         }
     }
+});
+
+app.get(`${CONFIG.urlPrefix}/authtest`, validateAccessToken, async function(req, res) {
+    res.send("successfully called protected api");
 });
 
 async function updatePlayer(player) {
