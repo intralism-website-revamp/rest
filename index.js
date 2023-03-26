@@ -401,12 +401,13 @@ app.post(`${CONFIG.urlPrefix}/addMap`, validateAccessToken, checkRequiredPermiss
         let mapid = fields.id;
         let mapname = fields.name;
         let mappoints = fields.points;
-        let mappp = fields.pp;
         let mapscore = fields.score;
         let mapstatus = fields.status;
         let mapimage = fields.image;
         let mapauthor = fields.author;
         let mapnominator = fields.nominator;
+
+        let mappp = Math.round(parseFloat(mappoints) * 0.08 * 2 * 100 * 100) / 100;
 
         let conn, mapauthorname;
 
