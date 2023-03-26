@@ -6,8 +6,10 @@ const bodyParser = require('body-parser');
 const cheerio = require('cheerio');
 const axios = require("axios");
 const CONFIG = require("./config.json");
-const {auth} = require("express-oauth2-jwt-bearer");
 const {errorHandler} = require("./errorHandler");
+const {checkRequiredPermissions} = require("./permissionCheck");
+const {validateAccessToken} = require("./validateToken");
+const formidable = require('formidable');
 
 app.use(cors());
 app.use(bodyParser.json({ extended: true }));
@@ -30,18 +32,14 @@ const server = app.listen(CONFIG.serverPort, function () {
     console.log("app listening at http://%s:%s", host, port);
 });
 
-const validateAccessToken = auth({
-    issuerBaseURL: CONFIG.auth0Domain,
-    audience: CONFIG.auth0Audience,
-    tokenSigningAlg: 'RS256'
-});
-
 const corsHeader = function (req, res, next) {
     res.header("Access-Control-Allow-Origin", CONFIG.corsAllowOrigin);
     next();
 }
 
 app.use(corsHeader);
+
+const form = formidable({ multiples: true});
 
 app.get(`${CONFIG.urlPrefix}/player/:id`, async function(req, res){
     const player = {};
@@ -394,8 +392,145 @@ app.get(`${CONFIG.urlPrefix}/scores/:mapid`, async function(req, res) {
     }
 });
 
-app.get(`${CONFIG.urlPrefix}/authtest`, validateAccessToken, async function(req, res) {
-    res.send("successfully called protected api");
+app.get(`${CONFIG.urlPrefix}/mapPermissions`, validateAccessToken, checkRequiredPermissions(["addMaps", "removeMaps"]), async function(req, res) {
+    res.send("User has access to delete/add maps");
+});
+
+app.post(`${CONFIG.urlPrefix}/addMap`, validateAccessToken, checkRequiredPermissions(["addMaps"]), async function(req, res) {
+    form.parse(req, async (err, fields) => {
+        let mapid = fields.id;
+        let mapname = fields.name;
+        let mappoints = fields.points;
+        let mappp = fields.pp;
+        let mapscore = fields.score;
+        let mapstatus = fields.status;
+        let mapimage = fields.image;
+        let mapauthor = fields.author;
+        let mapnominator = fields.nominator;
+
+        let conn, mapauthorname;
+
+        try {
+            conn = await pool.getConnection();
+            await conn.query("INSERT INTO `maps` (`id`, `name`, `points`, `pp`, `score`, `status`, `image`, `author`) VALUES ('" + mapid + "', '" + mapname + "', '" + mappoints + "', '" + mappp + "', '" + mapscore + "', '" + mapstatus + "', '" + mapimage + "', '" + mapauthor + "');");
+            let player = await conn.query("SELECT * FROM `players` where id='" + mapauthor + "';");
+
+            if(player[0] === undefined) {
+                mapauthorname = mapauthor;
+            } else {
+                mapauthorname = player[0].name;
+            }
+        } catch(err) {
+            console.log(err);
+        } finally {
+            if(conn) {
+                await conn.end();
+            }
+        }
+
+        let embeds = [
+            {
+                title: `New official map`,
+                url: CONFIG.websiteBaseUrl + "/map/" + mapid,
+                color: 5174599,
+                thumbnail: {
+                    url: mapimage
+                },
+                description: `**${mapname}**\n`
+                    + `Difficulty: ${mappoints}\n`
+                    + `PP: ${mappp}\n`
+                    + `Max Score: ${mapscore}\n`
+                    + `Status: ${mapstatus}\n`
+                    + `Author: [${mapauthorname}](${CONFIG.websiteBaseUrl}/profile/${mapauthor})\n`
+                    + `Nominated by: ${mapnominator}`
+            },
+        ];
+
+        let data = JSON.stringify({ embeds });
+
+        const config = {
+            method: "POST",
+            url: CONFIG.webhookUrl,
+            headers: { "Content-Type": "application/json" },
+            data: data,
+        };
+
+        await axios(config)
+            .then()
+            .catch((error) => {
+                console.log(error);
+            });
+    });
+    res.send("Map added");
+});
+
+app.post(`${CONFIG.urlPrefix}/removeMap`, validateAccessToken, checkRequiredPermissions(["removeMaps"]), async function(req, res) {
+    form.parse(req, async (err, fields) => {
+        let removeReason = fields.removeReason;
+        let removedBy = fields.removedBy;
+        let mapId = fields.mapId;
+        let mapName = fields.mapName;
+        let mapImage = fields.mapImage;
+
+        let conn;
+
+        try {
+            conn = await pool.getConnection();
+            await conn.query("DELETE FROM `maps` WHERE id='" + mapId + "'");
+        } catch(err) {
+            console.log(err);
+        } finally {
+            if(conn) {
+                await conn.end();
+            }
+        }
+
+        let embeds = [
+            {
+                title: `Map removed`,
+                color: 15548997,
+                thumbnail: {
+                    url: mapImage
+                },
+                description: `**${mapName}**\n`
+                    + `Reason: ${removeReason}\n`
+                    + `Removed by: ${removedBy}`
+            },
+        ];
+
+        let data = JSON.stringify({ embeds });
+
+        const config = {
+            method: "POST",
+            url: CONFIG.webhookUrl,
+            headers: { "Content-Type": "application/json" },
+            data: data,
+        };
+
+        await axios(config)
+            .then()
+            .catch((error) => {
+                console.log(error);
+            });
+    });
+    res.send("Map removed");
+});
+
+app.get(`${CONFIG.urlPrefix}/userInfo/:email`, validateAccessToken, async function(req, res) {
+    const email = req.params.email;
+
+    let conn;
+    try {
+        conn = await pool.getConnection();
+        let user = await conn.query("SELECT * FROM `users` where email='" + email + "'");
+        res.send(JSON.stringify(user[0]));
+    } catch(err) {
+        console.log(err);
+    } finally {
+        if(conn) {
+            await conn.end();
+        }
+    }
 });
 
 async function updatePlayer(player) {
