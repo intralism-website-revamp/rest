@@ -478,6 +478,7 @@ app.post(`${CONFIG.urlPrefix}/removeMap`, validateAccessToken, checkRequiredPerm
         try {
             conn = await pool.getConnection();
             await conn.query("DELETE FROM `maps` WHERE id='" + mapId + "'");
+            await conn.query("DELETE FROM `scores` WHERE map_id='" + mapId + "'");
         } catch(err) {
             console.log(err);
         } finally {
