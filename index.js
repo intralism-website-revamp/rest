@@ -42,51 +42,11 @@ app.use(corsHeader);
 const form = formidable({ multiples: true});
 
 app.get(`${CONFIG.urlPrefix}/player/:id`, async function(req, res){
-    const player = {};
-    const { data } = await axios.get('https://intralism.khb-soft.ru/?player=' + req.params.id);
-    const content = cheerio.load(data);
-    const playerInfoDiv = content('body > main > div.row > div.col-md-4.text-md-right').text().split('\n');
-    const tempName = content('body > main > div.mt-5 > h1 > span').text();
-    player.id = req.params.id;
-    player.name = tempName.substring(0, tempName.lastIndexOf("#"));
-    player.name = player.name.split("#");
-    player.country = content('body > main > div.mt-5 > p > span').text();
-    player.countryShort = content('body > main > div.mt-5 > p > img').attr().class.split(' ')[1].split('-')[1];
+    let player = await UpdatePlayerFromWebsite(req.params.id, true);
 
-    if (player.countryShort === "") {
-        player.countryShort = "none";
-    }
+    player.missingScores = [];
 
-    player.accuracy = playerInfoDiv[3].split(':')[1].replace(" ", "").replaceAll("%", "");
-    player.misses = playerInfoDiv[4].split(':')[1].replace(" ", "");
-    player.points = content('body > main > p > span').text();
-    player.points = player.points.replace('Ranked Points: ', '').replace(" ", "");
-    player.picture = content('body > main > div.mt-5 > img').attr().src;
-
-    let conn;
-
-    if(player.points === "0.00") {
-        try {
-            conn = await pool.getConnection();
-            await conn.query("DELETE FROM `players` where id='" + req.params.id + "';");
-            await conn.query("DELETE FROM `scores` where player_id='" + req.params.id + "';");
-        } catch(err) {
-            console.log(err);
-        } finally {
-            if(conn) {
-                await conn.end();
-            }
-        }
-        res.header("Access-Control-Allow-Origin", "*");
-        res.send(JSON.stringify(player));
-        return;
-    }
-
-    let mapname = "default";
-    let i = 0;
-    player.scores = [];
-
-    let maps;
+    let maps, conn;
 
     try {
         conn = await pool.getConnection();
@@ -98,95 +58,6 @@ app.get(`${CONFIG.urlPrefix}/player/:id`, async function(req, res){
             await conn.end();
         }
     }
-
-    while(mapname !== "") {
-        i++;
-        mapname = content('body > main > div.table-responsive > table > tbody > tr:nth-child(' + i + ') > td.text-left').text();
-
-        if(mapname === "") {
-            continue;
-        }
-
-        const score = {};
-        score.hardcore = false;
-
-        if(mapname.endsWith('Hardcore')) {
-            mapname = mapname.substring(0, mapname.lastIndexOf('Hardcore'));
-            score.hardcore = true;
-        } else if(mapname.endsWith('Hidden') || mapname.endsWith('Endless') || mapname.endsWith('Random')) {
-            continue;
-        }
-
-        const tempId = content('body > main > div.table-responsive > table > tbody > tr:nth-child(' + i + ') > td.text-left > a').attr().href;
-        score.id = tempId.substring(tempId.lastIndexOf('=') + 1, tempId.length);
-
-        if(!maps.find(x => parseInt(x.id) === parseInt(score.id))) {
-            continue;
-        }
-
-        const map = maps.find(x => parseInt(x.id) === parseInt(score.id));
-
-        score.date = content('body > main > div.table-responsive > table > tbody > tr:nth-child(' + i + ') > td:nth-child(1)').text();
-        score.score = content('body > main > div.table-responsive > table > tbody > tr:nth-child(' + i + ') > td:nth-child(3)').text();
-        score.score = parseInt(score.score.replaceAll(" ", ""));
-        score.maxscore = parseInt(map.score);
-        score.accuracy = content('body > main > div.table-responsive > table > tbody > tr:nth-child(' + i + ') > td:nth-child(4)').text();
-        score.accuracy = parseFloat(score.accuracy.replaceAll("%", ""));
-        score.misses = parseInt(content('body > main > div.table-responsive > table > tbody > tr:nth-child(' + i + ') > td:nth-child(5)').text());
-        score.points = parseFloat(content('body > main > div.table-responsive > table > tbody > tr:nth-child(' + i + ') > td:nth-child(6)').text());
-        score.maxpoints = parseFloat(map.points);
-        score.mapname = mapname;
-        score.pp = Math.round(score.score / score.maxscore * (Math.pow(0.9, score.misses)) * score.accuracy * score.maxpoints * 0.08 * 2 * 100) / 100;
-        score.image = map.image;
-
-        let grade = 'Grade_';
-        const acc = score.accuracy;
-
-        if(acc === 100) {
-            grade += 'SS.svg';
-        } else if(acc < 100 && acc >= 99) {
-            grade += 'S.svg';
-        } else if(acc < 99 && acc >= 98) {
-            grade += 'A.svg';
-        } else if(acc < 98 && acc >= 96) {
-            grade += 'B.svg';
-        } else if(acc < 96 && acc >= 94) {
-            grade += 'C.svg';
-        } else if(acc < 94) {
-            grade += 'F.svg';
-        }
-
-        score.grade = grade;
-
-        if(score.accuracy === '100.00') {
-            if(map.status === 'Broken') {
-                score.points = score.points - 0.01;
-            }
-        }
-
-        player.scores.push(score);
-    }
-
-    player.scores.sort((a, b) => b.pp - a.pp);
-    player.weightedpp = 0.0;
-
-    for(let j = 0; j < player.scores.length; j++) {
-        if(j >= 75) {
-            player.scores[j].weightedpp = 0;
-            continue;
-        }
-        player.scores[j].weightedpp = Math.round(player.scores[j].pp * Math.pow(0.95, j) * 100) / 100;
-        player.weightedpp += player.scores[j].weightedpp;
-    }
-
-    player.weightedpp = Math.round(player.weightedpp * 100) / 100;
-
-    let updatePlayerResult = await updatePlayer(player);
-    player.globalRank = updatePlayerResult.globalRank;
-    player.countryRank = updatePlayerResult.countryRank;
-    await updatePlayerScores(player, updatePlayerResult.updateTime);
-
-    player.missingScores = [];
 
     for(let j = 0; j < maps.length; j++) {
         if(player.scores.find(x => BigInt(x.id) === BigInt(maps[j].id)) === undefined) {
@@ -520,19 +391,8 @@ app.post(`${CONFIG.urlPrefix}/removeMap`, validateAccessToken, checkRequiredPerm
 
 app.get(`${CONFIG.urlPrefix}/userInfo/:email`, validateAccessToken, async function(req, res) {
     const email = req.params.email;
-
-    let conn;
-    try {
-        conn = await pool.getConnection();
-        let user = await conn.query("SELECT * FROM `users` where email='" + email + "'");
-        res.send(JSON.stringify(user[0]));
-    } catch(err) {
-        console.log(err);
-    } finally {
-        if(conn) {
-            await conn.end();
-        }
-    }
+    let returnValue = await GetUserInfoFromEmail(email);
+    res.send(returnValue);
 });
 
 app.get(`${CONFIG.urlPrefix}/mods`, async function(req, res) {
@@ -619,6 +479,21 @@ app.get(`${CONFIG.urlPrefix}/recalcLeaderboard`, validateAccessToken, checkRequi
 
 app.get(`${CONFIG.urlPrefix}/adminPermission`, validateAccessToken, checkRequiredPermissions(["addMaps", "removeMaps", "recalcRanks"]), async function(req, res) {
     res.send("User has admin permission");
+});
+
+app.get(`${CONFIG.urlPrefix}/forceUpdatePlayer/:email`, validateAccessToken, async function(req, res) {
+    let userInfoRaw = await GetUserInfoFromEmail(req.params.email);
+    let userInfo = JSON.parse(userInfoRaw);
+
+    let steamId = userInfo.steam_id;
+
+    if(steamId === undefined || steamId === null) {
+        res.send("Steam Account not linked");
+        return;
+    }
+
+    await UpdatePlayerFromWebsite(steamId, false);
+    res.send("Player updated");
 });
 
 async function updatePlayer(player) {
@@ -716,7 +591,7 @@ async function updatePlayer(player) {
     return {updateTime: updateTime, globalRank: newRank, countryRank: countryNewRank};
 }
 
-async function updatePlayerScores(player, updateTime) {
+async function updatePlayerScores(player, updateTime, checkForTime) {
     let conn;
 
     try {
@@ -725,7 +600,7 @@ async function updatePlayerScores(player, updateTime) {
         for(let i = 0; i < player.scores.length; i++) {
             const score = player.scores[i];
 
-            if(parseWebsiteDateToDate(score.date).getTime() < updateTime.getTime()) {
+            if(parseWebsiteDateToDate(score.date).getTime() < updateTime.getTime() && checkForTime) {
                 continue;
             }
 
@@ -808,4 +683,170 @@ function parseWebsiteDateToDate(websiteDate) {
     }
 
     return date;
+}
+
+async function GetUserInfoFromEmail(email) {
+    let conn;
+    let returnValue;
+
+    try {
+        conn = await pool.getConnection();
+        let user = await conn.query("SELECT * FROM `users` where email='" + email + "'");
+        returnValue = JSON.stringify(user[0]);
+    } catch(err) {
+        console.log(err);
+    } finally {
+        if(conn) {
+            await conn.end();
+        }
+    }
+
+    return returnValue;
+}
+
+async function UpdatePlayerFromWebsite(id, checkForTime) {
+    const player = {};
+    const { data } = await axios.get('https://intralism.khb-soft.ru/?player=' + id);
+    const content = cheerio.load(data);
+    const playerInfoDiv = content('body > main > div.row > div.col-md-4.text-md-right').text().split('\n');
+    const tempName = content('body > main > div.mt-5 > h1 > span').text();
+    player.id = id;
+    player.name = tempName.substring(0, tempName.lastIndexOf("#"));
+    player.name = player.name.split("#");
+    player.country = content('body > main > div.mt-5 > p > span').text();
+    player.countryShort = content('body > main > div.mt-5 > p > img').attr().class.split(' ')[1].split('-')[1];
+
+    if (player.countryShort === "") {
+        player.countryShort = "none";
+    }
+
+    player.accuracy = playerInfoDiv[3].split(':')[1].replace(" ", "").replaceAll("%", "");
+    player.misses = playerInfoDiv[4].split(':')[1].replace(" ", "");
+    player.points = content('body > main > p > span').text();
+    player.points = player.points.replace('Ranked Points: ', '').replace(" ", "");
+    player.picture = content('body > main > div.mt-5 > img').attr().src;
+
+    let conn;
+
+    if(player.points === "0.00") {
+        try {
+            conn = await pool.getConnection();
+            await conn.query("DELETE FROM `players` where id='" + id + "';");
+            await conn.query("DELETE FROM `scores` where player_id='" + id + "';");
+        } catch(err) {
+            console.log(err);
+        } finally {
+            if(conn) {
+                await conn.end();
+            }
+        }
+
+        return player;
+    }
+
+    let mapname = "default";
+    let i = 0;
+    player.scores = [];
+
+    let maps;
+
+    try {
+        conn = await pool.getConnection();
+        maps = await conn.query("select * from `maps`");
+    } catch (err) {
+        console.log(err);
+    } finally {
+        if(conn) {
+            await conn.end();
+        }
+    }
+
+    while(mapname !== "") {
+        i++;
+        mapname = content('body > main > div.table-responsive > table > tbody > tr:nth-child(' + i + ') > td.text-left').text();
+
+        if(mapname === "") {
+            continue;
+        }
+
+        const score = {};
+        score.hardcore = false;
+
+        if(mapname.endsWith('Hardcore')) {
+            mapname = mapname.substring(0, mapname.lastIndexOf('Hardcore'));
+            score.hardcore = true;
+        } else if(mapname.endsWith('Hidden') || mapname.endsWith('Endless') || mapname.endsWith('Random')) {
+            continue;
+        }
+
+        const tempId = content('body > main > div.table-responsive > table > tbody > tr:nth-child(' + i + ') > td.text-left > a').attr().href;
+        score.id = tempId.substring(tempId.lastIndexOf('=') + 1, tempId.length);
+
+        if(!maps.find(x => parseInt(x.id) === parseInt(score.id))) {
+            continue;
+        }
+
+        const map = maps.find(x => parseInt(x.id) === parseInt(score.id));
+
+        score.date = content('body > main > div.table-responsive > table > tbody > tr:nth-child(' + i + ') > td:nth-child(1)').text();
+        score.score = content('body > main > div.table-responsive > table > tbody > tr:nth-child(' + i + ') > td:nth-child(3)').text();
+        score.score = parseInt(score.score.replaceAll(" ", ""));
+        score.maxscore = parseInt(map.score);
+        score.accuracy = content('body > main > div.table-responsive > table > tbody > tr:nth-child(' + i + ') > td:nth-child(4)').text();
+        score.accuracy = parseFloat(score.accuracy.replaceAll("%", ""));
+        score.misses = parseInt(content('body > main > div.table-responsive > table > tbody > tr:nth-child(' + i + ') > td:nth-child(5)').text());
+        score.points = parseFloat(content('body > main > div.table-responsive > table > tbody > tr:nth-child(' + i + ') > td:nth-child(6)').text());
+        score.maxpoints = parseFloat(map.points);
+        score.mapname = mapname;
+        score.pp = Math.round(score.score / score.maxscore * (Math.pow(0.9, score.misses)) * score.accuracy * score.maxpoints * 0.08 * 2 * 100) / 100;
+        score.image = map.image;
+
+        let grade = 'Grade_';
+        const acc = score.accuracy;
+
+        if(acc === 100) {
+            grade += 'SS.svg';
+        } else if(acc < 100 && acc >= 99) {
+            grade += 'S.svg';
+        } else if(acc < 99 && acc >= 98) {
+            grade += 'A.svg';
+        } else if(acc < 98 && acc >= 96) {
+            grade += 'B.svg';
+        } else if(acc < 96 && acc >= 94) {
+            grade += 'C.svg';
+        } else if(acc < 94) {
+            grade += 'F.svg';
+        }
+
+        score.grade = grade;
+
+        if(score.accuracy === '100.00') {
+            if(map.status === 'Broken') {
+                score.points = score.points - 0.01;
+            }
+        }
+
+        player.scores.push(score);
+    }
+
+    player.scores.sort((a, b) => b.pp - a.pp);
+    player.weightedpp = 0.0;
+
+    for(let j = 0; j < player.scores.length; j++) {
+        if(j >= 75) {
+            player.scores[j].weightedpp = 0;
+            continue;
+        }
+        player.scores[j].weightedpp = Math.round(player.scores[j].pp * Math.pow(0.95, j) * 100) / 100;
+        player.weightedpp += player.scores[j].weightedpp;
+    }
+
+    player.weightedpp = Math.round(player.weightedpp * 100) / 100;
+
+    let updatePlayerResult = await updatePlayer(player);
+    player.globalRank = updatePlayerResult.globalRank;
+    player.countryRank = updatePlayerResult.countryRank;
+    await updatePlayerScores(player, updatePlayerResult.updateTime, checkForTime);
+
+    return player;
 }
