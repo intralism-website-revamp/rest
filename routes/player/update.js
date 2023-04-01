@@ -4,8 +4,19 @@ const playerFunctions = require("../../functions/playerFunctions");
 const pool = require("../../dbConnection");
 
 router
-    .get('/:id', async function(req, res){
-        let player = await playerFunctions.UpdatePlayerFromWebsite(req.params.id, true);
+    .get('/:playerid', async function(req, res){
+        let playerId = req.params.playerid;
+
+        try {
+            BigInt(playerId);
+        } catch(err) {
+            console.log(err);
+            res.send('Player ID is not a BigInt');
+
+            return;
+        }
+
+        let player = await playerFunctions.UpdatePlayerFromWebsite(playerId, true);
 
         player.missingScores = [];
 

@@ -4,11 +4,22 @@ const pool = require("../dbConnection");
 
 router
     .get('/:playerid', async function(req, res){
+        let playerId = req.params.playerid;
+
+        try {
+            BigInt(playerId);
+        } catch(err) {
+            console.log(err);
+            res.send('Player ID is not a BigInt');
+
+            return;
+        }
+
         let conn;
 
         try {
             conn = await pool.getConnection();
-            let tags = await conn.query("select t.name, t.order from `tags` as t, `player_tags` as pt where player_id='" + req.params.playerid + "' and t.id = pt.tag_id");
+            let tags = await conn.query("select t.name, t.order from `tags` as t, `player_tags` as pt where player_id='" + playerId + "' and t.id = pt.tag_id");
 
             tags = tags.sort((a, b) => b.id - a.id);
 

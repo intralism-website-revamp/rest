@@ -4,11 +4,22 @@ const pool = require("../../dbConnection");
 
 router
     .get('/:playerid', async function(req, res) {
+        let playerId = req.params.playerid;
+
+        try {
+            BigInt(playerId);
+        } catch(err) {
+            console.log(err);
+            res.send('Player ID is not a BigInt');
+
+            return;
+        }
+
         let conn;
 
         try {
             conn = await pool.getConnection();
-            let playerRaw = await conn.query("select * from `players` where id='" + req.params.playerid + "'");
+            let playerRaw = await conn.query("select * from `players` where id='" + playerId + "'");
 
             if(playerRaw[0] === undefined) {
                 res.send(JSON.stringify(null));
@@ -25,7 +36,7 @@ router
                 country = regionNames.of(player.country.toUpperCase());
             }
 
-            let scoresRaw = await conn.query("select * from `scores` where player_id='" + req.params.playerid + "'");
+            let scoresRaw = await conn.query("select * from `scores` where player_id='" + playerId + "'");
             let maps = await conn.query("select * from `maps`");
             let scores = [];
 
