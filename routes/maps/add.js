@@ -52,8 +52,8 @@ router
                     },
                     description: `**${mapname}**\n`
                         + `Difficulty: ${mappoints}\n`
-                        + `PP: ${mappp}\n`
-                        + `Max Score: ${mapscore}\n`
+                        + `PP: ${mappp}pp\n`
+                        + `Max Score: ${mapscore.toString().replace(/\B(?=(\d{3})+(?!\d))/g, ",")}\n`
                         + `Status: ${mapstatus}\n`
                         + `Author: [${mapauthorname}](${CONFIG.websiteBaseUrl}/profile/${mapauthor})\n`
                         + `Nominated by: ${mapnominator}`
