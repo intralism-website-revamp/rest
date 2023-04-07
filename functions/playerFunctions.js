@@ -1,9 +1,8 @@
 const axios = require("axios");
 const cheerio = require("cheerio");
-
 const pool = require("../dbConnection");
 const helper = require('../functions/helperFunctions');
-
+const CONFIG = require('../config.json');
 
 exports.UpdatePlayerFromWebsite  = async function(id, checkForTime) {
     const player = {};
@@ -134,11 +133,7 @@ exports.UpdatePlayerFromWebsite  = async function(id, checkForTime) {
     player.weightedpp = 0.0;
 
     for(let j = 0; j < player.scores.length; j++) {
-        if(j >= 75) {
-            player.scores[j].weightedpp = 0;
-            continue;
-        }
-        player.scores[j].weightedpp = Math.round(player.scores[j].pp * Math.pow(0.95, j) * 100) / 100;
+        player.scores[j].weightedpp = Math.round(player.scores[j].pp * Math.pow(CONFIG.weightConstant, j) * 100) / 100;
         player.weightedpp += player.scores[j].weightedpp;
     }
 
